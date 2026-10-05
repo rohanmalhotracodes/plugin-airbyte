@@ -18,13 +18,13 @@ public class SyncMetadata {
 
     @Schema(
         title = "Source tables",
-        description = "Source streams affected by the sync and the number of records emitted from each one"
+        description = "Source streams affected by the sync and the number of records emitted from each one. Contains one entry per stream returned by Airbyte, so its size follows the connection's stream count"
     )
     List<Table> source;
 
     @Schema(
         title = "Destination tables",
-        description = "Destination streams affected by the sync and the number of records committed to each one"
+        description = "Destination streams affected by the sync and the number of records committed to each one. Contains one entry per stream returned by Airbyte, so its size follows the connection's stream count"
     )
     List<Table> destination;
 

@@ -16,7 +16,6 @@ import io.kestra.core.http.client.HttpClientException;
 import io.kestra.core.models.annotations.Example;
 import io.kestra.core.models.annotations.Metric;
 import io.kestra.core.models.annotations.Plugin;
-import io.kestra.core.models.annotations.PluginProperty;
 import io.kestra.core.models.executions.metrics.Counter;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.models.tasks.RunnableTask;
@@ -32,6 +31,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
+import io.kestra.core.models.annotations.PluginProperty;
 
 @SuperBuilder
 @ToString
@@ -56,6 +56,10 @@ import lombok.experimental.SuperBuilder;
                     type: io.kestra.plugin.airbyte.connections.Sync
                     url: http://localhost:8080
                     connectionId: e3b1ce92-547c-436f-b1e8-23b6936c12cd
+
+                  - id: log_rows_synced
+                    type: io.kestra.plugin.core.log.Log
+                    message: "Rows synced: {{ outputs.sync.metadata.rowsSynced }}"
                 """
         ),
         @Example(
@@ -244,7 +248,7 @@ public class Sync extends AbstractAirbyteConnection implements RunnableTask<Sync
             .jobId(Property.ofValue(jobId.toString()))
             .build();
 
-        CheckStatus.Output checkStatusOutput = checkStatus.run(runContext);
+        var checkStatusOutput = checkStatus.run(runContext);
 
         return Output.builder()
             .jobId(jobId)
@@ -314,13 +318,11 @@ public class Sync extends AbstractAirbyteConnection implements RunnableTask<Sync
             .addHeader("Accept-Encoding", "identity")
             .body(
                 HttpRequest.JsonRequestBody.builder()
-                    .content(
-                        Map.of(
-                            "configTypes", List.of("sync"),
-                            "configId", connectionId,
-                            "pagination", Map.of("pageSize", 5, "rowOffset", 0)
-                        )
-                    )
+                    .content(Map.of(
+                        "configTypes", List.of("sync"),
+                        "configId", connectionId,
+                        "pagination", Map.of("pageSize", 5, "rowOffset", 0)
+                    ))
                     .build()
             );
 
@@ -330,13 +332,11 @@ public class Sync extends AbstractAirbyteConnection implements RunnableTask<Sync
             .map(JobList::getJobs)
             .orElseGet(List::of)
             .stream()
-            .filter(
-                jobInfo -> jobInfo.getJob() != null
-                    // Defense-in-depth: the request above already restricts to "sync" via `configTypes`, but a server
-                    // that ignores/mis-applies that filter must not be able to get a reset/clear job silently adopted.
-                    && jobInfo.getJob().getConfigType() == JobConfigType.SYNC
-                    && ACTIVE_JOB_STATUS.contains(jobInfo.getJob().getStatus())
-            )
+            .filter(jobInfo -> jobInfo.getJob() != null
+                // Defense-in-depth: the request above already restricts to "sync" via `configTypes`, but a server
+                // that ignores/mis-applies that filter must not be able to get a reset/clear job silently adopted.
+                && jobInfo.getJob().getConfigType() == JobConfigType.SYNC
+                && ACTIVE_JOB_STATUS.contains(jobInfo.getJob().getStatus()))
             .map(jobInfo -> jobInfo.getJob().getId())
             .max(Comparator.naturalOrder());
     }

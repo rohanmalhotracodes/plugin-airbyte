@@ -128,6 +128,165 @@ class SyncMockTest extends AbstractAirbyteConnectionTest {
     }
 
     @Test
+    void checkStatus_uses_only_succeeded_attempts_and_handles_nullable_stats(WireMockRuntimeInfo wireMockRuntimeInfo) throws Exception {
+        stubApplicationToken();
+
+        stubFor(
+            post(urlPathMatching("/api/v1/jobs/get/?"))
+                .withHeader("Authorization", equalTo("Bearer ey.mock.local"))
+                .withRequestBody(matchingJsonPath("$.id", equalTo("321")))
+                .willReturn(okJson("""
+                    {
+                      "job": { "id": 321, "status": "succeeded" },
+                      "attempts": [
+                        {
+                          "attempt": {
+                            "id": 0,
+                            "status": "failed",
+                            "recordsSynced": 999,
+                            "streamStats": [
+                              {
+                                "streamName": "customers",
+                                "streamNamespace": "public",
+                                "stats": { "recordsEmitted": 999, "recordsCommitted": 999 }
+                              }
+                            ]
+                          },
+                          "logs": { "logLines": [] }
+                        },
+                        {
+                          "attempt": {
+                            "id": 1,
+                            "status": "succeeded",
+                            "recordsSynced": 12,
+                            "streamStats": [
+                              {
+                                "streamName": "customers",
+                                "streamNamespace": "public",
+                                "stats": { "recordsEmitted": 14, "recordsCommitted": 12 }
+                              },
+                              {
+                                "streamName": "orders",
+                                "streamNamespace": "sales",
+                                "stats": null
+                              },
+                              {
+                                "streamName": "empty_stream",
+                                "streamNamespace": null,
+                                "stats": { "recordsEmitted": null, "recordsCommitted": null }
+                              }
+                            ]
+                          },
+                          "logs": { "logLines": [] }
+                        }
+                      ]
+                    }
+                    """))
+        );
+
+        var runContext = runContextFactory.of(Map.of());
+        var task = CheckStatus.builder()
+            .url(Property.ofValue(wireMockRuntimeInfo.getHttpBaseUrl()))
+            .applicationCredentials(
+                io.kestra.plugin.airbyte.AbstractAirbyteConnection.ApplicationCredentials.builder()
+                    .clientId(Property.ofValue("local-client"))
+                    .clientSecret(Property.ofValue("local-secret"))
+                    .build()
+            )
+            .jobId(Property.ofValue("321"))
+            .build();
+
+        var out = task.run(runContext);
+
+        assertThat(out.getFinalJobStatus(), is("succeeded"));
+        assertThat(out.getMetadata().getRowsSynced(), is(12L));
+        assertThat(out.getMetadata().getSource().size(), is(3));
+        assertThat(out.getMetadata().getSource().getFirst().getRows(), is(14L));
+        assertThat(out.getMetadata().getSource().get(1).getRows(), is(nullValue()));
+        assertThat(out.getMetadata().getSource().get(2).getRows(), is(nullValue()));
+        assertThat(out.getMetadata().getDestination().size(), is(3));
+        assertThat(out.getMetadata().getDestination().getFirst().getRows(), is(12L));
+        assertThat(out.getMetadata().getDestination().get(1).getRows(), is(nullValue()));
+        assertThat(out.getMetadata().getDestination().get(2).getRows(), is(nullValue()));
+    }
+
+    @Test
+    void checkStatus_falls_back_to_recordsSynced_when_streamStats_are_null(WireMockRuntimeInfo wireMockRuntimeInfo) throws Exception {
+        stubApplicationToken();
+
+        stubFor(
+            post(urlPathMatching("/api/v1/jobs/get/?"))
+                .willReturn(okJson("""
+                    {
+                      "job": { "id": 322, "status": "succeeded" },
+                      "attempts": [
+                        {
+                          "attempt": {
+                            "id": 0,
+                            "status": "succeeded",
+                            "recordsSynced": 9,
+                            "streamStats": null
+                          },
+                          "logs": { "logLines": [] }
+                        }
+                      ]
+                    }
+                    """))
+        );
+
+        var runContext = runContextFactory.of(Map.of());
+        var task = CheckStatus.builder()
+            .url(Property.ofValue(wireMockRuntimeInfo.getHttpBaseUrl()))
+            .applicationCredentials(
+                io.kestra.plugin.airbyte.AbstractAirbyteConnection.ApplicationCredentials.builder()
+                    .clientId(Property.ofValue("local-client"))
+                    .clientSecret(Property.ofValue("local-secret"))
+                    .build()
+            )
+            .jobId(Property.ofValue("322"))
+            .build();
+
+        var out = task.run(runContext);
+
+        assertThat(out.getMetadata().getRowsSynced(), is(9L));
+        assertThat(out.getMetadata().getSource().size(), is(0));
+        assertThat(out.getMetadata().getDestination().size(), is(0));
+    }
+
+    @Test
+    void checkStatus_handles_null_attempts(WireMockRuntimeInfo wireMockRuntimeInfo) throws Exception {
+        stubApplicationToken();
+
+        stubFor(
+            post(urlPathMatching("/api/v1/jobs/get/?"))
+                .willReturn(okJson("""
+                    {
+                      "job": { "id": 323, "status": "succeeded" },
+                      "attempts": null
+                    }
+                    """))
+        );
+
+        var runContext = runContextFactory.of(Map.of());
+        var task = CheckStatus.builder()
+            .url(Property.ofValue(wireMockRuntimeInfo.getHttpBaseUrl()))
+            .applicationCredentials(
+                io.kestra.plugin.airbyte.AbstractAirbyteConnection.ApplicationCredentials.builder()
+                    .clientId(Property.ofValue("local-client"))
+                    .clientSecret(Property.ofValue("local-secret"))
+                    .build()
+            )
+            .jobId(Property.ofValue("323"))
+            .build();
+
+        var out = task.run(runContext);
+
+        assertThat(out.getMetadata().getRowsSynced(), is(0L));
+        assertThat(out.getMetadata().getSource().size(), is(0));
+        assertThat(out.getMetadata().getDestination().size(), is(0));
+    }
+
+    @Test
     void run_succeeded_history_triggers_new_sync(WireMockRuntimeInfo wireMockRuntimeInfo) throws Exception {
         stubApplicationToken();
         stubJobsList("""
