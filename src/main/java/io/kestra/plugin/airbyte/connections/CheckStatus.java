@@ -12,6 +12,7 @@ import io.kestra.core.http.HttpResponse;
 import io.kestra.core.models.annotations.Example;
 import io.kestra.core.models.annotations.Metric;
 import io.kestra.core.models.annotations.Plugin;
+import io.kestra.core.models.annotations.PluginProperty;
 import io.kestra.core.models.executions.metrics.Counter;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.models.tasks.RunnableTask;
@@ -22,6 +23,7 @@ import io.kestra.plugin.airbyte.models.Attempt;
 import io.kestra.plugin.airbyte.models.AttemptInfo;
 import io.kestra.plugin.airbyte.models.JobInfo;
 import io.kestra.plugin.airbyte.models.JobStatus;
+import io.kestra.plugin.airbyte.models.SyncMetadata;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotNull;
@@ -29,7 +31,6 @@ import lombok.*;
 import lombok.experimental.SuperBuilder;
 
 import static io.kestra.core.utils.Rethrow.throwSupplier;
-import io.kestra.core.models.annotations.PluginProperty;
 
 @SuperBuilder
 @ToString
@@ -211,7 +212,75 @@ public class CheckStatus extends AbstractAirbyteConnection implements RunnableTa
 
         return Output.builder()
             .finalJobStatus(finalJobStatus.getJob().getStatus().toString())
+            .metadata(syncMetadata(finalJobStatus))
             .build();
+    }
+
+    private static SyncMetadata syncMetadata(JobInfo jobInfo) {
+        Map<Stream, Long> source = new LinkedHashMap<>();
+        Map<Stream, Long> destination = new LinkedHashMap<>();
+
+        Optional.ofNullable(jobInfo.getAttempts()).orElseGet(List::of)
+            .stream()
+            .map(AttemptInfo::getAttempt)
+            .filter(Objects::nonNull)
+            .flatMap(attempt -> Optional.ofNullable(attempt.getStreamStats()).orElseGet(List::of).stream())
+            .filter(Objects::nonNull)
+            .forEach(streamStats ->
+            {
+                Stream stream = new Stream(streamStats.getStreamName(), streamStats.getStreamNamespace());
+                if (streamStats.getStats() == null) {
+                    source.putIfAbsent(stream, null);
+                    destination.putIfAbsent(stream, null);
+                    return;
+                }
+
+                merge(source, stream, streamStats.getStats().getRecordsEmitted());
+                merge(destination, stream, streamStats.getStats().getRecordsCommitted());
+            });
+
+        Long rowsSynced = destination.values().stream()
+            .filter(Objects::nonNull)
+            .reduce(0L, Long::sum);
+
+        if (destination.values().stream().noneMatch(Objects::nonNull)) {
+            rowsSynced = Optional.ofNullable(jobInfo.getAttempts()).orElseGet(List::of)
+                .stream()
+                .map(AttemptInfo::getAttempt)
+                .filter(Objects::nonNull)
+                .map(Attempt::getRecordsSynced)
+                .filter(Objects::nonNull)
+                .reduce(0L, Long::sum);
+        }
+
+        return SyncMetadata.builder()
+            .rowsSynced(rowsSynced)
+            .source(toTables(source))
+            .destination(toTables(destination))
+            .build();
+    }
+
+    private static void merge(Map<Stream, Long> tables, Stream stream, Long rows) {
+        if (rows == null) {
+            tables.putIfAbsent(stream, null);
+        } else {
+            tables.merge(stream, rows, Long::sum);
+        }
+    }
+
+    private static List<SyncMetadata.Table> toTables(Map<Stream, Long> tables) {
+        return tables.entrySet().stream()
+            .map(
+                entry -> SyncMetadata.Table.builder()
+                    .name(entry.getKey().name())
+                    .namespace(entry.getKey().namespace())
+                    .rows(entry.getValue())
+                    .build()
+            )
+            .toList();
+    }
+
+    private record Stream(String name, String namespace) {
     }
 
     private void sendLog(Logger logger, JobInfo job) {
@@ -251,5 +320,11 @@ public class CheckStatus extends AbstractAirbyteConnection implements RunnableTa
             description = "Terminal Airbyte job status returned by the task"
         )
         private final String finalJobStatus;
+
+        @Schema(
+            title = "Sync metadata",
+            description = "Rows synced and source and destination tables affected by the completed Airbyte job"
+        )
+        private final SyncMetadata metadata;
     }
 }

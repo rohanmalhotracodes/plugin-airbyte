@@ -76,7 +76,18 @@ class SyncMockTest extends AbstractAirbyteConnectionTest {
                       "job": { "id": 123, "status": "succeeded" },
                       "attempts": [
                         {
-                          "attempt": { "id": 0, "status": "succeeded" },
+                          "attempt": {
+                            "id": 0,
+                            "status": "succeeded",
+                            "recordsSynced": 42,
+                            "streamStats": [
+                              {
+                                "streamName": "customers",
+                                "streamNamespace": "public",
+                                "stats": { "recordsEmitted": 45, "recordsCommitted": 42 }
+                              }
+                            ]
+                          },
                           "logs": { "logLines": ["sync started", "sync finished"] }
                         }
                       ]
@@ -102,6 +113,16 @@ class SyncMockTest extends AbstractAirbyteConnectionTest {
         assertThat(out, notNullValue());
         assertThat(out.getJobId(), notNullValue());
         assertThat(out.getAdopted(), is(false));
+        assertThat(out.getMetadata(), notNullValue());
+        assertThat(out.getMetadata().getRowsSynced(), is(42L));
+        assertThat(out.getMetadata().getSource().size(), is(1));
+        assertThat(out.getMetadata().getSource().getFirst().getName(), is("customers"));
+        assertThat(out.getMetadata().getSource().getFirst().getNamespace(), is("public"));
+        assertThat(out.getMetadata().getSource().getFirst().getRows(), is(45L));
+        assertThat(out.getMetadata().getDestination().size(), is(1));
+        assertThat(out.getMetadata().getDestination().getFirst().getName(), is("customers"));
+        assertThat(out.getMetadata().getDestination().getFirst().getNamespace(), is("public"));
+        assertThat(out.getMetadata().getDestination().getFirst().getRows(), is(42L));
 
         verify(exactly(1), postRequestedFor(urlPathMatching("/api/v1/connections/sync/?")));
     }
@@ -145,6 +166,7 @@ class SyncMockTest extends AbstractAirbyteConnectionTest {
         assertThat(out.getJobId(), is(101L));
         assertThat(out.getAdopted(), is(false));
         assertThat(out.getAlreadyRunning(), is(false));
+        assertThat(out.getMetadata(), is(nullValue()));
 
         verify(exactly(1), postRequestedFor(urlPathMatching("/api/v1/connections/sync/?")));
     }

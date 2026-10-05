@@ -16,6 +16,7 @@ import io.kestra.core.http.client.HttpClientException;
 import io.kestra.core.models.annotations.Example;
 import io.kestra.core.models.annotations.Metric;
 import io.kestra.core.models.annotations.Plugin;
+import io.kestra.core.models.annotations.PluginProperty;
 import io.kestra.core.models.executions.metrics.Counter;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.models.tasks.RunnableTask;
@@ -25,12 +26,12 @@ import io.kestra.plugin.airbyte.models.JobConfigType;
 import io.kestra.plugin.airbyte.models.JobInfo;
 import io.kestra.plugin.airbyte.models.JobList;
 import io.kestra.plugin.airbyte.models.JobStatus;
+import io.kestra.plugin.airbyte.models.SyncMetadata;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
-import io.kestra.core.models.annotations.PluginProperty;
 
 @SuperBuilder
 @ToString
@@ -243,12 +244,13 @@ public class Sync extends AbstractAirbyteConnection implements RunnableTask<Sync
             .jobId(Property.ofValue(jobId.toString()))
             .build();
 
-        checkStatus.run(runContext);
+        CheckStatus.Output checkStatusOutput = checkStatus.run(runContext);
 
         return Output.builder()
             .jobId(jobId)
             .alreadyRunning(adopted)
             .adopted(adopted)
+            .metadata(checkStatusOutput.getMetadata())
             .build();
     }
 
@@ -312,11 +314,13 @@ public class Sync extends AbstractAirbyteConnection implements RunnableTask<Sync
             .addHeader("Accept-Encoding", "identity")
             .body(
                 HttpRequest.JsonRequestBody.builder()
-                    .content(Map.of(
-                        "configTypes", List.of("sync"),
-                        "configId", connectionId,
-                        "pagination", Map.of("pageSize", 5, "rowOffset", 0)
-                    ))
+                    .content(
+                        Map.of(
+                            "configTypes", List.of("sync"),
+                            "configId", connectionId,
+                            "pagination", Map.of("pageSize", 5, "rowOffset", 0)
+                        )
+                    )
                     .build()
             );
 
@@ -326,11 +330,13 @@ public class Sync extends AbstractAirbyteConnection implements RunnableTask<Sync
             .map(JobList::getJobs)
             .orElseGet(List::of)
             .stream()
-            .filter(jobInfo -> jobInfo.getJob() != null
-                // Defense-in-depth: the request above already restricts to "sync" via `configTypes`, but a server
-                // that ignores/mis-applies that filter must not be able to get a reset/clear job silently adopted.
-                && jobInfo.getJob().getConfigType() == JobConfigType.SYNC
-                && ACTIVE_JOB_STATUS.contains(jobInfo.getJob().getStatus()))
+            .filter(
+                jobInfo -> jobInfo.getJob() != null
+                    // Defense-in-depth: the request above already restricts to "sync" via `configTypes`, but a server
+                    // that ignores/mis-applies that filter must not be able to get a reset/clear job silently adopted.
+                    && jobInfo.getJob().getConfigType() == JobConfigType.SYNC
+                    && ACTIVE_JOB_STATUS.contains(jobInfo.getJob().getStatus())
+            )
             .map(jobInfo -> jobInfo.getJob().getId())
             .max(Comparator.naturalOrder());
     }
@@ -361,5 +367,11 @@ public class Sync extends AbstractAirbyteConnection implements RunnableTask<Sync
             description = "Whether `jobId` refers to a sync that was already running and got adopted, rather than a sync newly triggered by this task"
         )
         private final Boolean adopted;
+
+        @Schema(
+            title = "Sync metadata",
+            description = "Rows synced and source and destination tables affected by the completed Airbyte job. Only available when `wait` is enabled"
+        )
+        private final SyncMetadata metadata;
     }
 }
